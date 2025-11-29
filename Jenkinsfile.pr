@@ -1,0 +1,133 @@
+pipeline {
+    agent any
+    
+    environment {
+        APP_NAME = 'fast-react-pizza'
+        DOCKER_IMAGE = "${APP_NAME}-pr-${env.BUILD_NUMBER}"
+        CONTAINER_NAME = "${APP_NAME}-pr-${env.BUILD_NUMBER}"
+        PORT = '3001'
+    }
+    
+    stages {
+        stage('📥 Checkout') {
+            steps {
+                echo '========== STAGE 1: CHECKOUT =========='
+                checkout scm
+                bat '''
+                    echo ✅ Code checked out
+                    echo 📁 Current directory:
+                    cd
+                    dir
+                    git log -1 --oneline
+                '''
+            }
+        }
+        
+        stage('⚙️ Setup') {
+            steps {
+                echo '========== STAGE 2: SETUP =========='
+                bat '''
+                    echo Checking versions...
+                    node --version
+                    npm --version
+                    docker --version
+                '''
+            }
+        }
+        
+        stage('🔨 Build') {
+            steps {
+                echo '========== STAGE 3: BUILD =========='
+                bat '''
+                    echo 📦 Installing dependencies...
+                    call npm ci
+                    echo ✅ Dependencies installed
+                '''
+            }
+        }
+        
+        stage('🐳 Docker Build') {
+            steps {
+                echo '========== STAGE 4: DOCKER BUILD =========='
+                bat '''
+                    echo 🐳 Building Docker image: %DOCKER_IMAGE%
+                    docker build -t %DOCKER_IMAGE% .
+                    echo ✅ Image built
+                    docker images | findstr %APP_NAME%
+                '''
+            }
+        }
+        
+        stage('🚀 Run') {
+    steps {
+        echo '========== STAGE 5: RUN CONTAINER =========='
+        bat '''
+            REM Cleanup old containers on port 3001
+            for /f "tokens=*" %%i in ('docker ps -aq --filter "publish=3001" 2^>nul') do docker rm -f %%i
+            
+            REM Also cleanup by name
+            docker rm -f %CONTAINER_NAME% 2>nul || echo No existing container
+            
+            REM Start new container
+            docker run -d --name %CONTAINER_NAME% -p %PORT%:80 %DOCKER_IMAGE%
+            
+            REM Wait 5 seconds (use ping instead of timeout for Jenkins)
+            ping 127.0.0.1 -n 6 > nul
+            
+            REM Verify container is running
+            docker ps | findstr %CONTAINER_NAME%
+        '''
+    }
+}
+        
+        stage('🔥 Smoke Test') {
+            steps {
+                echo '========== STAGE 6: SMOKE TESTS =========='
+                bat '''
+                    set APP_URL=http://localhost:%PORT%
+                    call npm run smoke
+                '''
+            }
+        }
+        
+        stage('📦 Archive Artifacts') {
+            steps {
+                echo '========== STAGE 7: ARCHIVE =========='
+                bat '''
+                    if not exist artifacts mkdir artifacts
+                    echo Build: %BUILD_NUMBER% > artifacts\\build-info.txt
+                    echo Job: %JOB_NAME% >> artifacts\\build-info.txt
+                    echo Status: PASSED >> artifacts\\build-info.txt
+                    echo Date: %date% %time% >> artifacts\\build-info.txt
+                    echo Image: %DOCKER_IMAGE% >> artifacts\\build-info.txt
+                    docker logs %CONTAINER_NAME% > artifacts\\container-logs.txt 2>&1
+                '''
+                archiveArtifacts artifacts: 'artifacts/*', allowEmptyArchive: false
+            }
+        }
+        
+        stage('🧹 Cleanup') {
+            steps {
+                echo '========== STAGE 8: CLEANUP =========='
+                bat '''
+                    docker stop %CONTAINER_NAME% 2>nul
+                    docker rm %CONTAINER_NAME% 2>nul
+                    docker rmi %DOCKER_IMAGE% 2>nul
+                    echo ✅ Cleanup complete
+                '''
+            }
+        }
+    }
+    
+    post {
+        success {
+            echo '✅ PR PIPELINE PASSED ✅'
+        }
+        failure {
+            echo '❌ PR PIPELINE FAILED ❌'
+        }
+        always {
+            cleanWs()
+        }
+    }
+}
