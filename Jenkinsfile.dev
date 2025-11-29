@@ -1,0 +1,124 @@
+pipeline {
+    agent any
+    
+    environment {
+        APP_NAME = 'fast-react-pizza'
+        DOCKER_IMAGE = "${APP_NAME}-dev-${env.BUILD_NUMBER}"
+        CONTAINER_NAME = "${APP_NAME}-dev-${env.BUILD_NUMBER}"
+        PORT = '3002'
+    }
+    
+    stages {
+        stage('📥 Checkout') {
+            steps {
+                echo '========== STAGE 1: CHECKOUT =========='
+                checkout scm
+                bat '''
+                    echo ✅ Checked out DEV branch
+                    git branch
+                    git log -1 --oneline
+                '''
+            }
+        }
+        
+        stage('⚙️ Setup') {
+            steps {
+                echo '========== STAGE 2: SETUP =========='
+                bat '''
+                    node --version
+                    npm --version
+                    docker --version
+                    git --version
+                '''
+            }
+        }
+        
+        stage('🔨 Build Application') {
+            steps {
+                echo '========== STAGE 3: BUILD APPLICATION =========='
+                bat '''
+                    echo 📦 Installing dependencies...
+                    call npm ci
+                    echo 🔍 Running linter...
+                    call npm run lint || echo Linter warnings ignored
+                    echo ✅ Build complete
+                '''
+            }
+        }
+        
+        stage('🐳 Docker Build') {
+            steps {
+                echo '========== STAGE 4: DOCKER BUILD =========='
+                bat '''
+                    echo 🐳 Building image: %DOCKER_IMAGE%
+                    docker build -t %DOCKER_IMAGE% .
+                    echo ✅ Docker image built
+                    docker images | findstr %APP_NAME%
+                '''
+            }
+        }
+        
+        stage('🚀 Run Container') {
+            steps {
+                echo '========== STAGE 5: RUN CONTAINER =========='
+                bat '''
+                    docker rm -f %CONTAINER_NAME% 2>nul
+                    docker run -d --name %CONTAINER_NAME% -p %PORT%:80 -e APP_VERSION=dev-%BUILD_NUMBER% %DOCKER_IMAGE%
+                    timeout /t 8 /nobreak
+                    docker ps | findstr %CONTAINER_NAME%
+                '''
+            }
+        }
+        
+        stage('🔥 Smoke Tests') {
+            steps {
+                echo '========== STAGE 6: SMOKE TESTS =========='
+                bat '''
+                    set APP_URL=http://localhost:%PORT%
+                    call npm run smoke
+                '''
+            }
+        }
+        
+        stage('📦 Archive Artifacts') {
+            steps {
+                echo '========== STAGE 7: ARCHIVE ARTIFACTS =========='
+                bat '''
+                    if not exist artifacts mkdir artifacts
+                    echo === DEV BUILD INFO === > artifacts\\build-info.txt
+                    echo Build Number: %BUILD_NUMBER% >> artifacts\\build-info.txt
+                    echo Branch: dev >> artifacts\\build-info.txt
+                    echo Status: PASSED >> artifacts\\build-info.txt
+                    echo Date: %date% %time% >> artifacts\\build-info.txt
+                    echo Image: %DOCKER_IMAGE% >> artifacts\\build-info.txt
+                    docker logs %CONTAINER_NAME% > artifacts\\container-logs.txt 2>&1
+                    docker inspect %DOCKER_IMAGE% > artifacts\\image-info.json
+                '''
+                archiveArtifacts artifacts: 'artifacts/*', allowEmptyArchive: false
+            }
+        }
+        
+        stage('🧹 Cleanup') {
+            steps {
+                echo '========== STAGE 8: CLEANUP =========='
+                bat '''
+                    docker stop %CONTAINER_NAME% 2>nul
+                    docker rm %CONTAINER_NAME% 2>nul
+                    docker rmi %DOCKER_IMAGE% 2>nul
+                '''
+            }
+        }
+    }
+    
+    post {
+        success {
+            echo '✅✅✅ DEV PIPELINE PASSED ✅✅✅'
+        }
+        failure {
+            echo '❌❌❌ DEV PIPELINE FAILED ❌❌❌'
+        }
+        always {
+            cleanWs()
+        }
+    }
+}
