@@ -34,18 +34,19 @@ pipeline {
         }
         
         stage('🔨 Build Application') {
-            steps {
-                echo '========== STAGE 3: BUILD APPLICATION =========='
-                bat '''
-                    echo 📦 Installing dependencies...
-                    call npm ci
-                    echo 🔍 Running linter...
-                    call npm run lint || echo Linter warnings ignored
-                    echo ✅ Build complete
-                '''
-            }
-        }
-        
+    steps {
+        echo '========== STAGE 3: BUILD APPLICATION =========='
+        bat '''
+            echo 📦 Installing dependencies... 
+            call npm ci
+            
+            echo 🔍 Running linter (warnings only)...
+            call npm run lint || echo "⚠️ Linter warnings ignored"
+            
+            echo ✅ Build complete
+        '''
+    }
+}
         stage('🐳 Docker Build') {
             steps {
                 echo '========== STAGE 4: DOCKER BUILD =========='
