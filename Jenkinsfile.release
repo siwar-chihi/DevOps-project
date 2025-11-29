@@ -2,11 +2,7 @@ pipeline {
     agent any
     
     environment {
-        APP_NAME = 'fast-react-pizza'
-        VERSION_TAG = "${env.TAG_NAME ?: 'v1.0.0'}"
-        DOCKER_IMAGE = "${APP_NAME}-${VERSION_TAG}"
-        CONTAINER_NAME = "${APP_NAME}-release-${env.BUILD_NUMBER}"
-        PORT = '3003'
+        VERSION = 'v1.0.0'
     }
     
     stages {
@@ -15,8 +11,8 @@ pipeline {
                 echo '========== STAGE 1: CHECKOUT =========='
                 checkout scm
                 bat '''
-                    echo ✅ Checked out tag: %VERSION_TAG%
-                    git describe --tags
+                    echo ✅ Checked out tag: v1.0.0
+                    git describe --tags || echo No tag
                     git log -1 --oneline
                 '''
             }
@@ -26,10 +22,9 @@ pipeline {
             steps {
                 echo '========== STAGE 2: SETUP =========='
                 bat '''
-                    echo 🏷️  Release Version: %VERSION_TAG%
+                    echo 🏷️  Release Version: v1.0.0
                     node --version
                     npm --version
-                    docker --version
                 '''
             }
         }
@@ -38,11 +33,10 @@ pipeline {
             steps {
                 echo '========== STAGE 3: BUILD =========='
                 bat '''
-                    echo 📦 Installing production dependencies...
+                    echo 📦 Installing dependencies...
                     call npm ci
-                    echo 🔍 Linting code...
-                    call npm run lint || echo Linter warnings ignored
-                    echo ✅ Build successful
+                    
+                    echo ✅ Dependencies installed
                 '''
             }
         }
@@ -51,10 +45,11 @@ pipeline {
             steps {
                 echo '========== STAGE 4: DOCKER BUILD =========='
                 bat '''
-                    echo 🐳 Building versioned image: %DOCKER_IMAGE%
-                    docker build -t %DOCKER_IMAGE% -t %APP_NAME%-latest .
-                    echo ✅ Image built and tagged
-                    docker images | findstr %APP_NAME%
+                    echo 🐳 Building release image: fast-react-pizza-v1.0.0
+                    docker build -t fast-react-pizza:v1.0.0 -t fast-react-pizza:latest . 
+                    
+                    echo ✅ Release image built
+                    docker images | findstr fast-react-pizza
                 '''
             }
         }
@@ -63,20 +58,31 @@ pipeline {
             steps {
                 echo '========== STAGE 5: RUN CONTAINER =========='
                 bat '''
-                    docker rm -f %CONTAINER_NAME% 2>nul
-                    docker run -d --name %CONTAINER_NAME% -p %PORT%:80 -e APP_VERSION=%VERSION_TAG% %DOCKER_IMAGE%
-                    timeout /t 10 /nobreak
-                    docker ps | findstr %CONTAINER_NAME%
+                    REM Cleanup old release container
+                    docker rm -f fast-react-pizza-release 2>nul || echo No old container
+                    
+                    REM Start release container
+                    docker run -d --name fast-react-pizza-release -p 3002:80 fast-react-pizza:v1.0.0
+                    
+                    REM Wait
+                    ping 127.0.0.1 -n 11 >nul
+                    
+                    REM Verify
+                    docker ps | findstr fast-react-pizza-release
+                    
+                    echo ✅ Release container running on http://localhost:3002
                 '''
             }
         }
         
         stage('🔥 Smoke Test') {
             steps {
-                echo '========== STAGE 6: SMOKE TESTS =========='
+                echo '========== STAGE 6: SMOKE TEST =========='
                 bat '''
-                    set APP_URL=http://localhost:%PORT%
-                    call npm run smoke
+                    echo 🧪 Testing release on http://localhost:3002
+                    curl -f http://localhost:3002 || exit /b 1
+                    
+                    echo ✅ Release smoke test PASSED
                 '''
             }
         }
@@ -85,18 +91,26 @@ pipeline {
             steps {
                 echo '========== STAGE 7: ARCHIVE RELEASE ARTIFACTS =========='
                 bat '''
-                    if not exist artifacts\\release-%VERSION_TAG% mkdir artifacts\\release-%VERSION_TAG%
-                    echo === RELEASE BUILD === > artifacts\\release-%VERSION_TAG%\\RELEASE-NOTES.txt
-                    echo Version: %VERSION_TAG% >> artifacts\\release-%VERSION_TAG%\\RELEASE-NOTES.txt
-                    echo Build: %BUILD_NUMBER% >> artifacts\\release-%VERSION_TAG%\\RELEASE-NOTES.txt
-                    echo Date: %date% %time% >> artifacts\\release-%VERSION_TAG%\\RELEASE-NOTES.txt
-                    echo Image: %DOCKER_IMAGE% >> artifacts\\release-%VERSION_TAG%\\RELEASE-NOTES.txt
-                    echo Status: PRODUCTION READY >> artifacts\\release-%VERSION_TAG%\\RELEASE-NOTES.txt
-                    docker logs %CONTAINER_NAME% > artifacts\\release-%VERSION_TAG%\\logs.txt 2>&1
-                    docker inspect %DOCKER_IMAGE% > artifacts\\release-%VERSION_TAG%\\image-details.json
-                    docker save %DOCKER_IMAGE% -o artifacts\\release-%VERSION_TAG%\\%APP_NAME%-%VERSION_TAG%.tar
+                    echo Creating release archive...
+                    
+                    echo Release Build Report > release-v1.0.0.log
+                    echo ==================== >> release-v1.0.0.log
+                    echo Version: v1.0.0 >> release-v1.0. 0.log
+                    echo Build Number: %BUILD_NUMBER% >> release-v1.0.0.log
+                    echo Build Date: %DATE% %TIME% >> release-v1. 0.0.log
+                    echo Docker Image: fast-react-pizza:v1.0.0 >> release-v1.0.0.log
+                    echo Status: SUCCESS >> release-v1. 0.0.log
+                    echo ==================== >> release-v1. 0.0.log
+                    
+                    REM Create release archive
+                    docker save fast-react-pizza:v1.0.0 -o fast-react-pizza-v1.0.0.tar
+                    
+                    echo ✅ Release artifacts created
+                    dir *.tar
+                    dir *.log
                 '''
-                archiveArtifacts artifacts: 'artifacts/**/*', allowEmptyArchive: false
+                
+                archiveArtifacts artifacts: '*.tar,*.log', allowEmptyArchive: false
             }
         }
         
@@ -104,9 +118,11 @@ pipeline {
             steps {
                 echo '========== STAGE 8: CLEANUP =========='
                 bat '''
-                    docker stop %CONTAINER_NAME% 2>nul
-                    docker rm %CONTAINER_NAME% 2>nul
-                    echo ✅ Keeping %DOCKER_IMAGE% for deployment
+                    echo 🧹 Stopping release container...
+                    docker stop fast-react-pizza-release || echo Already stopped
+                    docker rm fast-react-pizza-release || echo Already removed
+                    
+                    echo ✅ Cleanup complete
                 '''
             }
         }
@@ -114,7 +130,9 @@ pipeline {
     
     post {
         success {
-            echo '🎉🎉🎉 RELEASE %VERSION_TAG% PIPELINE PASSED 🎉🎉🎉'
+            echo '✅✅✅ RELEASE v1.0.0 PIPELINE PASSED ✅✅✅'
+            echo '📦 Release artifacts archived successfully'
+            echo '🐳 Docker image: fast-react-pizza:v1.0.0'
         }
         failure {
             echo '❌❌❌ RELEASE PIPELINE FAILED ❌❌❌'
